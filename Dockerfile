@@ -19,6 +19,8 @@ RUN pip3 install --no-cache-dir \
     numpy \
     opencv-python \
     pytest
+    joblib \
+    scikit-learn
 
 # Setup workspace
 WORKDIR /app
