@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.6//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_6.dtd'>
+<nta>
+	<declaration>// Place global declarations here.
+// ===== Timing constants (milliseconds) =====
+const int T_HB       = 100;   // heartbeat period (lead emits every 100 ms)
+const int T_LINKLOSS = 300;   // no heartbeat for this long =&gt; link declared lost
+const int T_FALLBACK = 200;   // must reach safe independent driving within this after link loss
+const int T_NOTIFY   = 100;   // JOIN/LEAVE notification latency bound (&lt; 100 ms)
+const int T_SYNC     = 20;    // 50 Hz speed synchronization period
+const int T_GAP_MAX  = 5000;  // gap must be created within 5 s
+
+// ===== Distances (metres, abstract integers) =====
+const int D_MIN = 10;         // minimum safe inter-vehicle gap
+const int D_GAP = 50;         // target departure gap
+
+// ===== Channels =====
+chan join_req, join_appr;              // joining handshake
+chan leave_req, leave_appr;            // leaving handshake
+broadcast chan heartbeat;              // lead -&gt; follower(s), non-blocking
+broadcast chan link_lost;              // watchdog raises this
+
+// ===== Shared state =====
+bool coupled = false;         // true while a truck is in the platoon
+int[0, 100] gap = 5;    // gap in metres, capped at 100</declaration>
+	<template>
+		<name x="5" y="5">JoiningTruck</name>
+		<declaration>// Place local declarations here.
+clock x;
+clock s;
+int[0,10] sync_count = 0;</declaration>
+		<location id="id0" x="-204" y="-43">
+			<name x="-214" y="-77">SpeedSync</name>
+			<label kind="invariant" x="-238" y="-25">s &lt;= T_SYNC</label>
+		</location>
+		<location id="id1" x="25" y="102">
+			<name x="15" y="68">PlatoonActive</name>
+		</location>
+		<location id="id2" x="-340" y="85">
+			<name x="-350" y="51">SafetyCheck</name>
+			<committed/>
+		</location>
+		<location id="id3" x="-340" y="-314">
+			<name x="-350" y="-348">Independent</name>
+		</location>
+		<location id="id4" x="-493" y="-34">
+			<name x="-503" y="-68">WaitApproval</name>
+			<label kind="invariant" x="-503" y="-17">x &lt;= T_NOTIFY</label>
+		</location>
+		<init ref="id3"/>
+		<transition id="id5">
+			<source ref="id0"/>
+			<target ref="id1"/>
+			<label kind="guard" x="-85" y="42">s &gt;= T_SYNC &amp;&amp; sync_count &gt;= 3</label>
+			<label kind="assignment" x="-144" y="25">coupled=true, x=0</label>
+		</transition>
+		<transition id="id6">
+			<source ref="id0"/>
+			<target ref="id0"/>
+			<label kind="guard" x="-289" y="-119">s &gt;= T_SYNC &amp;&amp; sync_count &lt; 3</label>
+			<label kind="assignment" x="-228" y="-102">s=0, gap=D_MIN+2, sync_count++</label>
+			<nail x="-246" y="-102"/>
+			<nail x="-246" y="-102"/>
+			<nail x="-162" y="-102"/>
+		</transition>
+		<transition id="id7">
+			<source ref="id2"/>
+			<target ref="id3"/>
+			<label kind="assignment" x="-399" y="-170">coupled=false</label>
+		</transition>
+		<transition id="id8">
+			<source ref="id2"/>
+			<target ref="id0"/>
+			<label kind="assignment" x="-322" y="21">s=0</label>
+		</transition>
+		<transition id="id9">
+			<source ref="id4"/>
+			<target ref="id2"/>
+			<label kind="synchronisation" x="-475" y="8">join_appr?</label>
+			<label kind="assignment" x="-475" y="25">x=0</label>
+		</transition>
+		<transition id="id10">
+			<source ref="id3"/>
+			<target ref="id4"/>
+			<label kind="synchronisation" x="-475" y="-140">join_req!</label>
+			<label kind="assignment" x="-475" y="-123">x=0</label>
+		</transition>
+	</template>
+	<template>
+		<name>LeadTruck</name>
+		<declaration>clock hb;   // heartbeat timer</declaration>
+		<location id="id11" x="-178" y="-246">
+			<name x="-188" y="-280">Idle</name>
+		</location>
+		<location id="id12" x="-340" y="-59">
+			<name x="-350" y="-93">HandleJoin</name>
+			<committed/>
+		</location>
+		<location id="id13" x="-170" y="51">
+			<name x="-180" y="17">HeartBeat_Emit</name>
+			<label kind="invariant" x="-180" y="68">hb &lt;= T_HB</label>
+		</location>
+		<location id="id14" x="8" y="-68">
+			<name x="-2" y="-102">HandleLeave</name>
+			<committed/>
+		</location>
+		<init ref="id11"/>
+		<transition id="id15">
+			<source ref="id11"/>
+			<target ref="id14"/>
+			<label kind="synchronisation" x="-8" y="-212">leave_req?</label>
+			<nail x="17" y="-221"/>
+		</transition>
+		<transition id="id16">
+			<source ref="id14"/>
+			<target ref="id11"/>
+			<label kind="synchronisation" x="-110" y="-153">leave_appr!</label>
+		</transition>
+		<transition id="id17">
+			<source ref="id13"/>
+			<target ref="id14"/>
+			<label kind="synchronisation" x="-152" y="-25">leave_req?</label>
+		</transition>
+		<transition id="id18">
+			<source ref="id13"/>
+			<target ref="id13"/>
+			<label kind="guard" x="-204" y="161">hb &gt;=T_HB</label>
+			<label kind="synchronisation" x="-204" y="178">heartbeat!</label>
+			<label kind="assignment" x="-204" y="195">hb=0</label>
+			<nail x="-255" y="187"/>
+			<nail x="-93" y="187"/>
+			<nail x="-127" y="119"/>
+		</transition>
+		<transition id="id19">
+			<source ref="id12"/>
+			<target ref="id13"/>
+			<label kind="synchronisation" x="-271" y="-46">join_appr!</label>
+			<label kind="assignment" x="-271" y="-29">hb=0</label>
+		</transition>
+		<transition id="id20">
+			<source ref="id11"/>
+			<target ref="id12"/>
+			<label kind="synchronisation" x="-297" y="-161">join_req?</label>
+		</transition>
+	</template>
+	<template>
+		<name>LeavingTruck</name>
+		<declaration>clock x;   // phase clock (notification bound)
+clock g;   // gap-creation clock</declaration>
+		<location id="id21" x="-59" y="-280">
+			<name x="-69" y="-314">InPlatoon</name>
+		</location>
+		<location id="id22" x="-348" y="-102">
+			<name x="-358" y="-136">WaitLeaveAppr</name>
+			<label kind="invariant" x="-358" y="-85">x &lt;= T_NOTIFY</label>
+		</location>
+		<location id="id23" x="-59" y="263">
+			<name x="-69" y="229">GapCretion</name>
+			<label kind="invariant" x="-110" y="272">g &lt;= T_GAP_MAX</label>
+		</location>
+		<location id="id24" x="136" y="-136">
+			<name x="126" y="-170">SafetyVerify</name>
+			<committed/>
+		</location>
+		<location id="id25" x="340" y="17">
+			<name x="330" y="-17">Departed</name>
+		</location>
+		<init ref="id21"/>
+		<transition id="id26">
+			<source ref="id24"/>
+			<target ref="id21"/>
+		</transition>
+		<transition id="id27">
+			<source ref="id24"/>
+			<target ref="id25"/>
+			<label kind="assignment" x="153" y="-34">coupled=false, x=0</label>
+		</transition>
+		<transition id="id28">
+			<source ref="id23"/>
+			<target ref="id21"/>
+			<label kind="guard" x="-127" y="-17">g &gt;= T_GAP_MAX</label>
+			<label kind="assignment" x="-127" y="0">g=0</label>
+		</transition>
+		<transition id="id29">
+			<source ref="id23"/>
+			<target ref="id24"/>
+			<label kind="guard" x="-17" y="76">g &lt;= T_GAP_MAX &amp;&amp; gap &gt;= D_GAP</label>
+			<label kind="assignment" x="-186" y="233">x=0</label>
+		</transition>
+		<transition id="id30">
+			<source ref="id23"/>
+			<target ref="id23"/>
+			<label kind="guard" x="-127" y="340">g &lt; T_GAP_MAX &amp;&amp; gap &lt; D_GAP</label>
+			<label kind="assignment" x="-127" y="374">gap=gap+1</label>
+			<nail x="-169" y="365"/>
+			<nail x="-169" y="365"/>
+			<nail x="9" y="365"/>
+		</transition>
+		<transition id="id31">
+			<source ref="id22"/>
+			<target ref="id23"/>
+			<label kind="synchronisation" x="-306" y="17">leave_appr?</label>
+			<label kind="assignment" x="-306" y="34">g=0</label>
+		</transition>
+		<transition id="id32">
+			<source ref="id21"/>
+			<target ref="id22"/>
+			<label kind="synchronisation" x="-271" y="-221">leave_req!</label>
+			<label kind="assignment" x="-272" y="-204">x=0</label>
+		</transition>
+	</template>
+	<system>// Place template instantiations here.
+jt = JoiningTruck();
+lt = LeadTruck();
+lv = LeavingTruck();
+
+// List one or more processes to be composed into a system.
+system jt, lt, lv;
+</system>
+	<queries>
+		<option key="--learning-method" value="2"/>
+		<query>
+			<formula>A[] not deadlock</formula>
+			<comment/>
+			<result outcome="failure" type="quality" timestamp="2026-07-03 11:19:50 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>E&lt;&gt; jt.PlatoonActive</formula>
+			<comment/>
+			<result outcome="success" type="quality" timestamp="2026-07-03 11:17:06 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>E&lt;&gt; lv.Departed</formula>
+			<comment/>
+			<result outcome="success" type="quality" timestamp="2026-07-03 11:07:40 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>jt.WaitApproval --&gt; jt.PlatoonActive</formula>
+			<comment/>
+			<result outcome="failure" type="quality" timestamp="2026-07-03 11:17:08 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>lv.WaitLeaveAppr --&gt; lv.Departed</formula>
+			<comment/>
+			<result outcome="failure" type="quality" timestamp="2026-07-03 11:17:10 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>A[] (jt.WaitApproval imply jt.x &lt;= T_NOTIFY)</formula>
+			<comment/>
+			<result outcome="success" type="quality" timestamp="2026-07-03 11:09:42 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>A[] (jt.SafetyCheck imply (jt.x &gt;= 0))</formula>
+			<comment/>
+			<result outcome="success" type="quality" timestamp="2026-07-03 11:17:14 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>jt.SpeedSync --&gt; jt.PlatoonActive</formula>
+			<comment/>
+			<result outcome="failure" type="quality" timestamp="2026-07-03 11:19:53 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+		<query>
+			<formula>lv.SafetyVerify --&gt; (lv.Departed || lv.InPlatoon)</formula>
+			<comment/>
+			<result outcome="success" type="quality" timestamp="2026-07-03 11:17:19 +0200">
+				<option key="--learning-method" value="2"/>
+			</result>
+		</query>
+	</queries>
+</nta>
