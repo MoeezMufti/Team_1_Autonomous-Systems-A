@@ -1,103 +1,99 @@
-# HSHL Line Following Lab
+# Autonomous Systems Lab - Team 1
 
-This lab has one goal: implement line following (detect the green line and output steering).
+This repository documents two pieces of work: an SVM-based line-following
+controller trained on annotated CARLA footage, and a truck-platooning
+communication protocol specified in SysML/UML and formally verified in
+UPPAAL.
 
-You only edit one file:
-- line_following_solution/my_line_follower.py
+## SVM Line Following
 
-Everything else (camera subscription, command publishing, ROS setup, Docker) is already provided.
+`detect_line(self, image) -> float | None` takes a camera frame and returns
+a continuous steering value in `[-1.0, 1.0]`, or `None` if the line is not
+detected. Steering is treated as regression rather than classification, since
+a classifier would force output into discrete buckets and produce jerky
+corrections at class boundaries.
 
-For the lab baseline, the framework continuously sends a constant forward throttle (about 30 km/h target behavior), and your code controls steering.
+**Data and annotation.** Training frames were recorded as ROS bags while
+driving through CARLA and extracted at regular intervals, covering straight
+sections, gradual bends, and sharp turns with unfiltered, realistic
+backgrounds. Each frame was manually annotated by drawing the intended lane
+path from the vehicle position toward the expected lane centre further
+ahead, using a consistent starting position and look-ahead distance.
 
-If the student node is not connected, the lab demo stays in manual control.
+**Feature extraction.** Each frame is reduced to a fixed-size feature vector:
+HSV saturation boosted to 150% for lighting robustness, a green colour
+threshold, a region-of-interest crop to the bottom 50% / centre 70% of the
+frame, nearest-to-vehicle blob selection to resolve forks or multiple line
+segments, then resize to 64x64 and flatten to a 4096-dim binary mask.
 
-## Quick Start (Student Path)
+**Label generation.** Each annotated path is converted to a signed steering
+value from a heading term (top-to-bottom horizontal displacement of the
+path) and an offset term (displacement of the path's base from frame
+centre), combined, scaled, and clipped to `[-1.0, 1.0]`.
 
-1. Clone and enter repo.
+**Model.** A `scikit-learn` pipeline of `StandardScaler` + `SVR` (RBF
+kernel, `C=1.0`, `epsilon=0.1`), stored at `models/svm_line_follower.pkl`.
+The epsilon-insensitive loss lets the model ignore pixel-level noise in the
+mask instead of fitting to it. At inference, a five-frame moving average
+smooths the raw prediction before it is used for steering; a discrete label
+(Hard/Slight Left, Straight, Slight/Hard Right) is derived from the smoothed
+value for logging only and plays no part in control.
 
-git clone https://github.com/AAT24/student_lineFollowing_HSHL.git
-cd student_lineFollowing_HSHL
+## Truck Platooning
 
-2. Place the instructor bag in bags/. The folder must contain metadata.yaml and .db3.
+Independent trucks form a synchronized convoy over V2V communication to cut
+drag, fuel use, and driver workload. The protocol is specified across three
+scenarios, each modelled with SysML requirements and UML state machines and
+then formalised as timed automata and verified in UPPAAL.
 
-Expected layout:
-student_lineFollowing_HSHL/
-bags/
-session_2026-XX-XX_XX-XX-XX/
-metadata.yaml
-session_..._0.db3
+### Scenario 1: Coupling
 
-3. Run bag replay stack.
+A lone truck requests to join an already-moving convoy. It sends a join
+request, is authorised via a cloud/NOC check, establishes a bounded-latency
+V2V link, and passes a safety check on the inter-vehicle gap, lane
+conditions, and blind spots. On success it synchronises speed with the lead
+truck via ACC at 50 Hz over three rounds, then merges into its slot and
+becomes an active platoon member. Failing the safety check, or a timeout or
+link loss at any earlier step, aborts the truck back to independent driving.
 
-docker compose --profile bag up --build
+### Scenario 2: Decoupling
 
-4. In a second terminal, watch your node logs.
+A platoon member departs safely without endangering itself, the remaining
+platoon, or surrounding traffic. The truck sends a leave request and waits
+for approval, the following vehicles create a departure gap of at least
+50 m within 5 seconds, a safety verification checks blind spots and lane
+conditions, and the truck then exits its slot and changes lane under active
+collision avoidance. The remaining trucks reorganise their positions,
+spacing, and speed once the departure is complete. Two `LeavingTruck`
+instances are modelled so that concurrent departure requests are handled
+correctly, serialised one at a time by the lead truck.
 
-docker compose logs -f line-follower
+### Scenario 3: Communication Failure and Safe Fallback
 
-5. Stop when done.
+The lead truck emits a heartbeat every 100 ms; a watchdog resets its timeout
+on every heartbeat received. If no heartbeat arrives for 300 ms, the
+watchdog declares the link lost, broadcasts a failure event, and the
+affected truck returns to independent driving. Safe fallback must be
+reached within 200 ms: the onboard controller maintains lane position,
+monitors distance, enlarges the gap, and triggers emergency braking if the
+minimum safe distance is violated. Recovery is conditional: if the
+heartbeat returns, the watchdog resumes monitoring, but the truck does not
+automatically re-couple and must run a new join procedure.
 
-docker compose --profile bag down --remove-orphans
+### Verification
 
-## What To Implement
+All three scenarios are combined into one UPPAAL model (joining truck, lead
+truck, two leaving trucks, and a watchdog) and checked with the symbolic
+model checker. Verified properties include:
 
-Edit line_following_solution/my_line_follower.py and implement:
-
-detect_line(self, image) -> float | None
-
-Return value meaning:
-- -1.0 means steer left
-- 0.0 means straight
-- +1.0 means steer right
-- None means line not detected (framework falls back to straight steering)
-
-Reference example:
-- docs/line_detection_example.py
-
-## Visualize Steering Offline (Recommended)
-
-Use this one command on Windows:
-
-powershell -ExecutionPolicy Bypass -File .\run_visualization.ps1
-
-What it does:
-- creates .venv if needed
-- installs missing packages (opencv-python, rosbags, numpy)
-- auto-detects bag folder
-- extracts camera frames
-- runs steering visualization and writes CSV
-
-Useful options:
-
-Start compose first:
-powershell -ExecutionPolicy Bypass -File .\run_visualization.ps1 -StartCompose
-
-No preview window:
-powershell -ExecutionPolicy Bypass -File .\run_visualization.ps1 -NoPreview
-
-Outputs:
-- visualization_output/frames
-- visualization_output/steering.csv
-
-## Manual Visualization Commands
-
-If you do not want the helper script:
-
-python docs/extract_images_from_bag.py ./bags/session_2026-XX-XX_XX-XX-XX --out extracted_images
-python visualize_line_follower.py --images extracted_images --output visualization_output --show
-
-## Fast Iteration (No Rebuild)
-
-In docker-compose.yaml, uncomment volume mount for line_following_solution, then restart:
-
-docker compose restart line-follower
-
-This lets code edits apply instantly without rebuilding images.
-
-## Minimal Validation Checklist
-
-Before submission, confirm:
-- compose starts without errors
-- line-follower receives camera frames
-- steering.csv has status ok rows and steer values
-- your steering direction is correct (left line -> negative steer, right line -> positive steer)
+- **Deadlock freedom** across the full composed system, including under
+  contention between two trucks leaving at once.
+- **Reachability** of coupling, decoupling, and emergency braking, so none
+  of these paths are dead code.
+- **Bounded timing**: join/leave approval within 100 ms, fallback within
+  200 ms, link loss declared within 300 ms.
+- **Resolution**: every safety-verification decision resolves to either a
+  completed manoeuvre or a safe return to the previous state, never a stuck
+  state.
+- **Conditional recovery**: the truck stays in fallback indefinitely if the
+  link does not return, rather than falsely assuming reconnection.
